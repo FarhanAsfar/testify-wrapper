@@ -1,0 +1,13 @@
+- name: "add two positive numbers"
+  input:
+    a: 2
+    b: 3
+  expected:
+    result: 5
+
+- name: "add zero to a number"
+  input:
+    a: 7
+    b: 0
+  expected:
+    result: 7

@@ -1,0 +1,16 @@
+# Binaries
+*.exe
+*.out
+*.test
+
+# Go module cache
+vendor/
+
+# Test coverage output
+coverage.out
+coverage.html
+
+# IDE files
+.idea/
+.vscode/
+*.swp 
