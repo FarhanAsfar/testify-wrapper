@@ -1,4 +1,4 @@
-// Package hooks provides an internal cleanup hook registry for testifyWrapper.
+// Package hooks provides an internal cleanup hook registry for testifywrapper.
 // It allows registering cleanup functions that are flushed in LIFO order,
 // ensuring resources are released in the reverse order they were acquired.
 //
@@ -6,7 +6,7 @@
 //   - testing (stdlib)
 //
 // Used by:
-//   - testifyWrapper.Instance (shutdown/cleanup wiring)
+//   - testifywrapper.Instance (shutdown/cleanup wiring)
 package hooks
 
 import "testing"
