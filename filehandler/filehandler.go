@@ -82,9 +82,9 @@ func (fh *FileHandler) LoadYAML(path string) ([]TestCase, error) {
 	// because yaml.v3 has no RawMessage equivalent. After unmarshalling we
 	// re-marshal each field to JSON bytes so TestCase always carries json.RawMessage.
 	type yamlTestCase struct {
-		Name     string      `yaml:"name"`
-		Input    interface{} `yaml:"input"`
-		Expected interface{} `yaml:"expected"`
+		Name     string `yaml:"name"`
+		Input    any    `yaml:"input"`
+		Expected any    `yaml:"expected"`
 	}
 
 	var raw []yamlTestCase
