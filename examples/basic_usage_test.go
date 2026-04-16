@@ -2,8 +2,6 @@
 // This file is both a runnable test and the primary onboarding document.
 // Read it top to bottom on day one.
 //
-// It covers three patterns you will use in every W3 Engineers Go project:
-//
 //  1. Simple test  — kit := testifyWrapper.New(t), use Assert() and Require()
 //  2. Suite test   — struct-based suite with lifecycle hooks via suite.Run()
 //  3. File-driven  — load fixture cases from JSON/YAML via kit.LoadJSON/LoadYAML

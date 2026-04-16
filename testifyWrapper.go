@@ -1,4 +1,4 @@
-// Package testifyWrapper provides a single, consistent testing harness for W3 Engineers Go projects.
+// Package testifyWrapper provides a single, consistent testing harness for Go projects.
 // It wraps testify with lifecycle management, file-driven test support, and suite running —
 // all accessible through one New(t) call.
 //
@@ -29,7 +29,7 @@
 //   - github.com/FarhanAsfar/testify-wrapper/require
 //
 // Used by:
-//   - Any W3 Engineers Go project as its primary test harness
+//   - Any Go project as its primary test harness
 package testifyWrapper
 
 import (
