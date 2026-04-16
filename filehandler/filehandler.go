@@ -35,9 +35,9 @@ var (
 // Name is used as the subtest name in t.Run.
 // Input and Expected are raw JSON — consumers unmarshal into their own concrete types.
 type TestCase struct {
-	Name     string          `json:"name"		yaml:"name"`
-	Input    json.RawMessage `json:"input"		yaml:"input"`
-	Expected json.RawMessage `json:"expected"		yaml:"expected"`
+	Name     string          `json:"name" yaml:"name"`
+	Input    json.RawMessage `json:"input" yaml:"input"`
+	Expected json.RawMessage `json:"expected" yaml:"expected"`
 }
 
 // FileHandler loads and runs fixture-based test cases.
