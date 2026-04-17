@@ -19,7 +19,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/stretchr/testify/assert/yaml"
+	"gopkg.in/yaml.v3"
 )
 
 // Sentinel errors for typed error checking via errors.Is()
