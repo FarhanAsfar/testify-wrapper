@@ -157,37 +157,30 @@ func (s *CalculatorSuite) Shutdown() {
 }
 
 // TestAdd verifies addition using the shared calculator.
-//
-// Note: suite Test* methods do not receive *testing.T directly in this MVP.
-// Use panic() as a hard stop — the Go test runner catches it as a test failure.
-// Storing *testing.T on the suite in SetupTest is the recommended post-MVP pattern.
+// s.T() returns the subtest-scoped *testing.T — use it to create a kit
+// or call t.Log, t.Error directly. This is the standard pattern.
 func (s *CalculatorSuite) TestAdd() {
+	kit := testifywrapper.New(s.T())
 	result := s.calc.Add(3, 4)
-	if result != 7 {
-		panic("TestAdd: expected 3 + 4 = 7")
-	}
+	kit.Assert().Equal(7, result, "3 + 4 should equal 7")
 }
 
 // TestSubtract verifies subtraction using the shared calculator.
 func (s *CalculatorSuite) TestSubtract() {
+	kit := testifywrapper.New(s.T())
 	result := s.calc.Subtract(10, 3)
-	if result != 7 {
-		panic("TestSubtract: expected 10 - 3 = 7")
-	}
+	kit.Assert().Equal(7, result, "10 - 3 should equal 7")
 }
 
 // TestHistoryIsResetBetweenTests verifies that SetupTest's Reset() call
 // means each test starts with a clean history — no bleed between tests.
 func (s *CalculatorSuite) TestHistoryIsResetBetweenTests() {
-	if len(s.calc.history) != 0 {
-		panic("TestHistoryIsResetBetweenTests: history was not reset before this test")
-	}
+	kit := testifywrapper.New(s.T())
+	kit.Assert().Empty(s.calc.history, "history must be empty at the start of each test")
 
 	s.calc.Add(1, 1)
 
-	if len(s.calc.history) != 1 {
-		panic("TestHistoryIsResetBetweenTests: expected exactly one history entry after Add")
-	}
+	kit.Assert().Len(s.calc.history, 1, "expected exactly one history entry after Add")
 }
 
 // TestCalculatorSuite is the standard Go test function that hands off to
