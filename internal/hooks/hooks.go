@@ -30,7 +30,7 @@ func New(t *testing.T) *Registry {
 func (r *Registry) Register(fn func()) {
 	r.t.Helper()
 	if fn == nil {
-		return
+		r.t.Fatal("RegisterCleanup: fn must not be nil")
 	}
 	r.t.Cleanup(fn)
 }
