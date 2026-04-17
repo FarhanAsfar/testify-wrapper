@@ -35,9 +35,17 @@ type Suite interface {
 	TearDownTest()
 	TearDownSuite()
 	Shutdown()
+
+	// T returns the *testing.T for the currently running Test* method.
+	// It is set by the runner before each SetupTest() call and is valid for the full duration of SetupTest -> TestXxx -> TearDownTest.
+	T() *testing.T
+
+	// setT is unexported - only the runner calls it.
+	// It is defined on BaseSuite and must not be overridden by consumers.
+	setT(t *testing.T)
 }
 
-// BaseSuite provides no-op implementations of all Suite lifecycle methods.
+// BaseSuite provides no-op implementations of all Suite lifecycle methods and manages the current *testing.T for the running test method.
 // Embedding this in our suite struct allows only to declare the methods we actually want to use.
 //
 // Example:
@@ -50,22 +58,64 @@ type Suite interface {
 //	func (s *MySuite) SetupSuite() {
 //	    s.db = connectDB()
 //	}
-type BaseSuite struct{}
+//	func (s *MyServiceSuite) Shutdown()   { s.db.Close() }
+//
+//	func (s *MyServiceSuite) TestCreate() {
+//	    kit := testifyWrapper.New(s.T())
+//	    kit.Assert().NoError(s.db.Ping())
+//	}
+type BaseSuite struct {
+	// currentT holds the *testing.T for the currently running Test* method.
+	// It is set by the runner via setT() before each test method runs.
+	// Unexported so consumers cannot accidentally overwrite it.
+	currentT *testing.T
+}
 
-func (b *BaseSuite) SetupSuite()    {}
-func (b *BaseSuite) SetupTest()     {}
-func (b *BaseSuite) TearDownTest()  {}
+// T returns the *testing.T for the currently running Test* method.
+// T() returns nil if called outside of a running test method (e.g. inside
+// SetupSuite or Shutdown) — those hooks run outside the subtest scope.
+func (b *BaseSuite) T() *testing.T {
+	return b.currentT
+}
+
+// setT is called by the runner to bind the current subtest's *testing.T
+// before each SetupTest → TestXxx → TearDownTest cycle.
+// Consumers must not call or override this method.
+func (b *BaseSuite) setT(t *testing.T) {
+	b.currentT = t
+}
+
+// SetupSuite is a no-op. Override in suite to run once before all tests.
+func (b *BaseSuite) SetupSuite() {}
+
+// SetupTest is a no-op. Override in suite to run before each Test* method.
+func (b *BaseSuite) SetupTest() {}
+
+// TearDownTest is a no-op. Override in suite to run after each Test* method.
+func (b *BaseSuite) TearDownTest() {}
+
+// TearDownSuite is a no-op. Override in suite to run once after all tests.
 func (b *BaseSuite) TearDownSuite() {}
-func (b *BaseSuite) Shutdown()      {}
+
+// Shutdown is a no-op. Override in suite to release long-lived resources.
+// Shutdown always runs after TearDownSuite — it is the guaranteed-final hook.
+func (b *BaseSuite) Shutdown() {}
 
 // Run executes all Test* methods on s as subtests of t, wiring lifecycle hooks automatically around each one.
 //
+// Before each Test* method, the subtest's *testing.T is stored on the suite
+// via setT() so suite methods can access it through s.T().
+
 // Shutdown and TearDownSuite are registered via t.Cleanup (not defer) so they
 // run even if a test calls t.Fatal or panics. Shutdown is registered first so
 // it runs last (t.Cleanup is LIFO), ensuring TearDownSuite always precedes final resource teardown.
 //
 // Reflection is used only for method discovery: finding methods whose names
-// start with "Test" on the concrete type of s. No other reflect usage exists in this package.
+// start with "Test" on the concrete type of s. Only methods with no parameters
+// (beyond the receiver) and no return values are executed — others are logged
+// and skipped.
+//
+//	No other reflect usage exists in this package.
 func Run(t *testing.T, s Suite) {
 	t.Helper()
 
@@ -94,11 +144,23 @@ func Run(t *testing.T, s Suite) {
 			continue
 		}
 
+		// Validate signature strictly: no parameters beyond the receiver,
+		// no return values. method.Type includes the receiver as the first
+		// parameter, so a valid Test* method has NumIn() == 1, NumOut() == 0.
+		// Log and skip anything that does not match — never panic.
+		if method.Type.NumIn() != 1 || method.Type.NumOut() != 0 {
+			t.Logf("suite: skipping %s — must have no parameters and no return values", method.Name)
+			continue
+		}
+
 		// Capture method name for the closure
 		methodName := method.Name
 		methodFunc := suiteValue.MethodByName(methodName)
 
 		t.Run(methodName, func(t *testing.T) {
+			// Bind the subtest's *testing.T to the suite before SetupTest
+			// so it is available for the full SetupTest → TestXxx → TearDownTest cycle.
+			s.setT(t)
 			s.SetupTest()
 			methodFunc.Call(nil)
 			s.TearDownTest()
