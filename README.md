@@ -1,6 +1,6 @@
-# Testify Wrapper
+# testifyWrapper
 
-A consistent, opinionated Go testing harness,
+A consistent, opinionated Go testing harness for W3 Engineers projects,
 built on top of [testify](https://github.com/stretchr/testify).
 
 One import. One `New(t)` call. You get assertions, lifecycle hooks,
@@ -36,7 +36,12 @@ func TestAdd(t *testing.T) {
 }
 ```
 
+---
+
 ### Struct-based suite with lifecycle hooks
+
+Embed `BaseSuite` for no-op defaults and override only the hooks you need.
+Access the current subtest's `*testing.T` inside any method via `s.T()`.
 
 ```go
 import (
@@ -45,16 +50,45 @@ import (
 )
 
 type MyServiceSuite struct {
-    suite.BaseSuite   // embed for no-op defaults — override only what you need
+    suite.BaseSuite   // provides s.T() and no-op lifecycle defaults
     db *sql.DB
 }
 
-func (s *MyServiceSuite) SetupSuite()    { s.db = connectTestDB() }
-func (s *MyServiceSuite) TearDownTest()  { s.db.Exec("DELETE FROM orders") }
-func (s *MyServiceSuite) Shutdown()      { s.db.Close() }
+// SetupSuite runs once before any Test* method.
+// Note: s.T() is nil here — it is only bound during Test* method execution.
+func (s *MyServiceSuite) SetupSuite() {
+    s.db = connectTestDB()
+}
 
+// SetupTest runs before each Test* method.
+// s.T() is valid here and points to the current subtest's *testing.T.
+func (s *MyServiceSuite) SetupTest() {
+    s.db.Exec("DELETE FROM orders") // reset state between tests
+}
+
+// Shutdown is the guaranteed-final hook — release long-lived resources here.
+func (s *MyServiceSuite) Shutdown() {
+    s.db.Close()
+}
+
+// Test* methods use s.T() to get the subtest-scoped *testing.T.
+// Wrap it with testifyWrapper.New() to get the full assertion API.
 func (s *MyServiceSuite) TestCreateOrder() {
-    // test logic here
+    kit := testifywrapper.New(s.T())
+
+    order, err := CreateOrder(s.db, "item-1")
+
+    kit.Require().NoError(err, "CreateOrder must not return an error")
+    kit.Assert().Equal("item-1", order.Item)
+}
+
+func (s *MyServiceSuite) TestListOrders() {
+    kit := testifywrapper.New(s.T())
+
+    orders, err := ListOrders(s.db)
+
+    kit.Require().NoError(err)
+    kit.Assert().NotEmpty(orders)
 }
 
 // TestMyServiceSuite is the only function the Go test runner calls directly.
@@ -65,11 +99,24 @@ func TestMyServiceSuite(t *testing.T) {
 
 **Lifecycle order:**
 ```
-SetupSuite
-  SetupTest → TestXxx → TearDownTest   (once per Test* method)
-TearDownSuite
-Shutdown
+SetupSuite                                      ← s.T() is nil here
+  SetupTest → TestXxx → TearDownTest            ← s.T() is valid here (once per Test*)
+TearDownSuite                                   ← s.T() is nil here
+Shutdown                                        ← s.T() is nil here
 ```
+
+**`s.T()` availability:**
+
+| Hook            | `s.T()` valid? |
+|-----------------|----------------|
+| `SetupSuite`    | ❌ nil          |
+| `SetupTest`     | ✅ yes          |
+| `TestXxx`       | ✅ yes          |
+| `TearDownTest`  | ✅ yes          |
+| `TearDownSuite` | ❌ nil          |
+| `Shutdown`      | ❌ nil          |
+
+---
 
 ### File-driven test
 
@@ -81,6 +128,7 @@ func TestAdd_FileDriven(t *testing.T) {
     kit.Require().NoError(err)
 
     kit.RunCases(t, cases, func(t *testing.T, tc testifywrapper.TestCase) {
+        // Always create a new kit bound to the subtest's own *testing.T.
         subKit := testifywrapper.New(t)
 
         var input struct{ A, B int }
@@ -98,14 +146,14 @@ func TestAdd_FileDriven(t *testing.T) {
 
 ## Packages
 
-| Package                          | Purpose                                                     |
-|----------------------------------|-------------------------------------------------------------|
-| `testifyWrapper` (root)          | Entry point — `New(t)` returns an `Instance` with everything wired |
-| `assert`                         | Non-fatal assertions — test keeps running after failure     |
-| `require`                        | Fatal assertions — test stops immediately after failure     |
-| `suite`                          | Struct-based suite runner with ordered lifecycle hooks      |
-| `filehandler`                    | JSON/YAML fixture loader for data-driven tests              |
-| `internal/hooks`                 | Internal cleanup registry (not for direct use)              |
+| Package                 | Purpose                                                              |
+|-------------------------|----------------------------------------------------------------------|
+| `testifyWrapper` (root) | Entry point — `New(t)` returns an `Instance` with everything wired  |
+| `assert`                | Non-fatal assertions — test keeps running after failure              |
+| `require`               | Fatal assertions — test stops immediately after failure              |
+| `suite`                 | Struct-based suite runner with ordered lifecycle hooks and `s.T()`   |
+| `filehandler`           | JSON/YAML fixture loader for data-driven tests                       |
+| `internal/hooks`        | Internal cleanup registry (not for direct use)                       |
 
 ---
 
@@ -114,11 +162,11 @@ func TestAdd_FileDriven(t *testing.T) {
 Both JSON and YAML are supported. Every fixture file must be a top-level
 array where each entry has three fields:
 
-| Field      | Type           | Description                                              |
-|------------|----------------|----------------------------------------------------------|
-| `name`     | string         | Becomes the subtest label in `go test` output            |
-| `input`    | object         | Your input — unmarshal into your own struct in the callback |
-| `expected` | object         | Your expected output — unmarshal into your own struct    |
+| Field      | Type   | Description                                                  |
+|------------|--------|--------------------------------------------------------------|
+| `name`     | string | Becomes the subtest label in `go test` output                |
+| `input`    | object | Your input — unmarshal into your own struct in the callback  |
+| `expected` | object | Your expected output — unmarshal into your own struct        |
 
 **JSON example** (`testdata/cases.json`):
 ```json
@@ -179,8 +227,7 @@ if errors.Is(err, filehandler.ErrInvalidFormat) {
 ## Key Behaviours to Know
 
 **Always use `RegisterCleanup` over `defer` for teardown inside tests.**
-`t.Cleanup` runs even when the test calls `t.Fatal` or panics. `defer` does
-not guarantee this in all cases.
+`t.Cleanup` runs even when the test calls `t.Fatal` or panics.
 
 ```go
 kit.RegisterCleanup(func() {
@@ -201,6 +248,12 @@ kit.RunCases(t, cases, func(t *testing.T, tc testifywrapper.TestCase) {
 })
 ```
 
+**`s.T()` is only valid during `SetupTest`, `TestXxx`, and `TearDownTest`.**
+It is nil during `SetupSuite`, `TearDownSuite`, and `Shutdown` because those
+hooks run outside the subtest scope. If you need to log or assert during
+suite-level hooks, store a reference to the parent `*testing.T` manually
+in your suite struct when `suite.Run(t, s)` is called.
+
 ---
 
 ## Contributing
@@ -214,7 +267,7 @@ kit.RunCases(t, cases, func(t *testing.T, tc testifywrapper.TestCase) {
 - `go test ./...` must pass
 - `go vet ./...` must pass with zero warnings
 - Every new exported symbol must have a GoDoc comment
-- Every new feature must have tests — no exceptions
+- Every new feature must include tests — no exceptions
 - Update `CHANGELOG.md` under the appropriate version section
 
 **Adding custom assertions:**
