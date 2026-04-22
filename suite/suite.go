@@ -11,6 +11,18 @@
 //   TearDownSuite()  ← registered via t.Cleanup (runs after all subtests)
 //   Shutdown()       ← registered via t.Cleanup (runs after TearDownSuite)
 
+// Accessing *testing.T inside suite methods:
+// Every Test* method and every lifecycle hook can access the current
+// subtest's *testing.T via s.T(). The runner calls setT(t) before
+// SetupTest(), so T() is valid for the full duration of each test method.
+//
+// Parallel mode:
+// If parallel.IsEnabled() is true, Run calls t.Parallel() on the parent t
+// before SetupSuite. This allows separate suites (e.g. TestUserSuite and
+// TestOrderSuite) to run concurrently with each other. The Test* methods
+// within a single suite always run sequentially — only the suite-level
+// parent runs in parallel.
+
 // Depends on:
 //   - testing (stdlib)
 //   - reflect (stdlib)
@@ -24,6 +36,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/FarhanAsfar/testify-wrapper/parallel"
 )
 
 // Suite defines the lifecycle interface every test suite must satisfy.
@@ -118,6 +132,14 @@ func (b *BaseSuite) Shutdown() {}
 //	No other reflect usage exists in this package.
 func Run(t *testing.T, s Suite) {
 	t.Helper()
+
+	// If parallel mode is enabled, mark this suite's parent test as parallel.
+	// This allows separate suites (e.g. TestUserSuite and TestOrderSuite) to
+	// run concurrently with each other within the same package.
+	// Individual Test* methods within this suite still run sequentially.
+	if parallel.IsEnabled() {
+		t.Parallel()
+	}
 
 	// Register Shutdown first - it runs last due to LIFO order
 	t.Cleanup(func() {
