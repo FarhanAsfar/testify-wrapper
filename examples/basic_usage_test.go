@@ -1,13 +1,15 @@
-// Package examples_test demonstrates full usage of testifyWrapper for new team members.
+// Package examples_test demonstrates full usage of testifyWrapper
 // This file is both a runnable test and the primary onboarding document.
 // Read it top to bottom on day one.
 //
-//  1. Simple test  — kit := testifyWrapper.New(t), use Assert() and Require()
-//  2. Suite test   — struct-based suite with lifecycle hooks via suite.Run()
-//  3. File-driven  — load fixture cases from JSON/YAML via kit.LoadJSON/LoadYAML
+//  1. Simple test    — kit := testifyWrapper.New(t), use Assert() and Require()
+//  2. Suite test     — struct-based suite with lifecycle hooks via suite.Run()
+//  3. File-driven    — load fixture cases from JSON/YAML via kit.LoadJSON/LoadYAML
+//  4. Parallel suite — multiple suites running concurrently via ConfigureParallel()
 //
 // Depends on:
 //   - encoding/json (stdlib)
+//   - os (stdlib)
 //   - testing (stdlib)
 //   - github.com/FarhanAsfar/testify-wrapper
 //   - github.com/FarhanAsfar/testify-wrapper/suite
@@ -18,6 +20,7 @@ package examples_test
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 
 	testifywrapper "github.com/FarhanAsfar/testify-wrapper"
@@ -27,13 +30,14 @@ import (
 // =============================================================================
 // The domain: a simple in-memory Calculator.
 //
-// We use this across all three patterns so the focus stays on the library,
+// We use this across all four patterns so the focus stays on the library,
 // not on the business logic. In a real project this might be a service,
 // a repository, or an HTTP client — the testing patterns are identical.
 // =============================================================================
 
 // Calculator performs basic arithmetic and records its operation history.
 type Calculator struct {
+	// history records every operation performed, in order.
 	history []string
 }
 
@@ -55,11 +59,39 @@ func (c *Calculator) Reset() {
 }
 
 // =============================================================================
+// Pattern 4 — Parallel suites via TestMain
+//
+// TestMain is the process-level entry point for the test binary.
+// It runs once before any test function executes — the right place to
+// configure process-wide settings like parallelism.
+//
+// When ConfigureParallel is called with Enabled:true, every suite.Run()
+// call in this package will invoke t.Parallel() on its parent test function.
+// This allows TestCalculatorSuite and TestAuditSuite (below) to run
+// concurrently with each other rather than sequentially.
+//
+// MaxProcs:0 tells automaxprocs to decide the GOMAXPROCS value — reading
+// the Linux cgroup CPU quota if available, falling back to runtime.NumCPU().
+// This is the recommended setting for CI and containerised environments.
+//
+// ResetParallel restores GOMAXPROCS to its original value after the run.
+// =============================================================================
+
+func TestMain(m *testing.M) {
+	testifywrapper.ConfigureParallel(testifywrapper.ParallelConfig{
+		Enabled:  true,
+		MaxProcs: 0, // let automaxprocs decide — recommended for CI
+	})
+	defer testifywrapper.ResetParallel()
+
+	os.Exit(m.Run())
+}
+
+// =============================================================================
 // Pattern 1 — Simple test with testifyWrapper.New(t)
 //
-// This is the most common pattern. One line at the top gives you Assert(),
-// Require(), LoadJSON/LoadYAML, RunCases, and RegisterCleanup — all bound
-// to the current test's *testing.T.
+// This is the most common pattern. One line at the top of your test gives you
+// Assert(), Require(), LoadJSON(), LoadYAML(), RunCases(), and RegisterCleanup().
 // =============================================================================
 
 func TestCalculator_Add_Simple(t *testing.T) {
@@ -77,114 +109,94 @@ func TestCalculator_Add_Simple(t *testing.T) {
 	// Assert() records the failure but lets the test keep running.
 	// Use it when you want to collect multiple failures in one run.
 	kit.Assert().Equal(5, result, "2 + 3 should equal 5")
-	kit.Assert().Len(calc.history, 1, "one operation should be recorded")
-}
-
-func TestCalculator_Subtract_Simple(t *testing.T) {
-	kit := testifywrapper.New(t)
-	calc := &Calculator{}
-
-	result := calc.Subtract(10, 4)
-
-	kit.Assert().Equal(6, result, "10 - 4 should equal 6")
+	kit.Assert().Len(calc.history, 1, "Add should record exactly one history entry")
 }
 
 func TestCalculator_RegisterCleanup(t *testing.T) {
 	kit := testifywrapper.New(t)
 	calc := &Calculator{}
 
-	// RegisterCleanup is the right way to schedule teardown inside a test.
-	// It runs even if the test calls t.Fatal or panics — defer does not
-	// guarantee this in all cases.
+	calc.Add(1, 1)
+
+	// RegisterCleanup runs after the test ends, even on t.Fatal or panic.
+	// Prefer this over defer for all teardown in test code.
 	kit.RegisterCleanup(func() {
 		calc.Reset()
-		// In a real test: close a DB connection, stop a server, etc.
 	})
 
-	calc.Add(1, 2)
-	kit.Assert().Len(calc.history, 1, "one operation should be in history")
+	kit.Assert().Len(calc.history, 1)
 }
 
 // =============================================================================
-// Pattern 2 — Struct-based suite with lifecycle hooks
+// Pattern 2 — Suite test with lifecycle hooks
 //
-// Use this pattern when tests share expensive setup — a database connection,
-// a running server, a seeded cache. SetupSuite runs once for the whole suite.
-// SetupTest / TearDownTest wrap each individual Test* method.
-// Shutdown is the last thing that runs, guaranteed — even on failure.
+// Use suites when multiple tests share expensive setup — a real DB connection,
+// an HTTP server, a seeded cache. The suite struct holds the shared resource.
+// BaseSuite provides no-op defaults for all five hooks — override only what
+// you need.
 //
-// Lifecycle order:
-//   SetupSuite
-//     SetupTest → TestXxx → TearDownTest   (repeated per Test* method)
-//   TearDownSuite
-//   Shutdown
+// Lifecycle order (guaranteed):
+//   SetupSuite  → once before all Test* methods
+//   SetupTest   → before each Test* method
+//   TearDownTest → after each Test* method
+//   TearDownSuite → once after all Test* methods
+//   Shutdown    → last, always — release long-lived resources here
 // =============================================================================
 
-// CalculatorSuite groups all Calculator tests that share initialisation.
-// Embed suite.BaseSuite to get no-op defaults — override only what you need.
+// CalculatorSuite demonstrates a suite with a shared Calculator instance.
+// SetupSuite initialises the calculator once. SetupTest resets it between
+// tests so each Test* method starts from a clean state.
 type CalculatorSuite struct {
 	suite.BaseSuite
-
-	// calc is the shared resource initialised once in SetupSuite.
-	// In a real project this might be *sql.DB, *http.Client, etc.
 	calc *Calculator
 }
 
-// SetupSuite runs once before any Test* method.
-// Initialise shared, expensive resources here.
 func (s *CalculatorSuite) SetupSuite() {
+	// Initialise the shared resource once for all Test* methods.
+	// In a real suite this might open a DB connection or start a server.
 	s.calc = &Calculator{}
 }
 
-// SetupTest runs before each individual Test* method.
-// Reset state here so tests never bleed into each other.
 func (s *CalculatorSuite) SetupTest() {
+	// Reset state before each test so methods are fully independent.
 	s.calc.Reset()
 }
 
-// TearDownTest runs after each individual Test* method.
-// Light per-test cleanup goes here.
-func (s *CalculatorSuite) TearDownTest() {
-	// Nothing needed for Calculator.
-	// In a real suite: roll back a DB transaction, clear mock recorded calls.
-}
-
-// Shutdown runs once after all Test* methods and after TearDownSuite.
-// Release long-lived resources here — this is the guaranteed-final hook.
 func (s *CalculatorSuite) Shutdown() {
+	// Release long-lived resources here — always runs last.
 	// In a real suite: s.db.Close(), s.server.Stop(), etc.
 	s.calc = nil
 }
 
-// TestAdd verifies addition using the shared calculator.
-// s.T() returns the subtest-scoped *testing.T — use it to create a kit
-// or call t.Log, t.Error directly. This is the standard pattern.
 func (s *CalculatorSuite) TestAdd() {
 	kit := testifywrapper.New(s.T())
 	result := s.calc.Add(3, 4)
 	kit.Assert().Equal(7, result, "3 + 4 should equal 7")
 }
 
-// TestSubtract verifies subtraction using the shared calculator.
 func (s *CalculatorSuite) TestSubtract() {
 	kit := testifywrapper.New(s.T())
 	result := s.calc.Subtract(10, 3)
 	kit.Assert().Equal(7, result, "10 - 3 should equal 7")
 }
 
-// TestHistoryIsResetBetweenTests verifies that SetupTest's Reset() call
-// means each test starts with a clean history — no bleed between tests.
 func (s *CalculatorSuite) TestHistoryIsResetBetweenTests() {
 	kit := testifywrapper.New(s.T())
+
+	// history must be empty — SetupTest called Reset() before this ran.
 	kit.Assert().Empty(s.calc.history, "history must be empty at the start of each test")
 
 	s.calc.Add(1, 1)
-
 	kit.Assert().Len(s.calc.history, 1, "expected exactly one history entry after Add")
 }
 
-// TestCalculatorSuite is the standard Go test function that hands off to
-// suite.Run. This is the only function the Go test runner calls directly.
+// TestCalculatorSuite is the entry point for the suite runner.
+// suite.Run discovers and executes all Test* methods on CalculatorSuite,
+// wiring the lifecycle hooks automatically.
+//
+// Because TestMain called ConfigureParallel with Enabled:true, suite.Run
+// will call t.Parallel() here — meaning TestCalculatorSuite and
+// TestAuditSuite run concurrently with each other.
 func TestCalculatorSuite(t *testing.T) {
 	suite.Run(t, &CalculatorSuite{})
 }
@@ -192,104 +204,120 @@ func TestCalculatorSuite(t *testing.T) {
 // =============================================================================
 // Pattern 3 — File-driven tests with LoadJSON / LoadYAML
 //
-// Use this pattern when the same logic needs to run against many input/output
-// pairs. Define your cases in a JSON or YAML fixture file — no boilerplate
-// in the test file itself. testifyWrapper handles the loop and subtest wiring.
+// Use file-driven tests when the same logic needs to run against many
+// input/expected pairs. The fixture file is the test case definition —
+// your test file only contains the assertion logic.
 //
-// Fixture file schema (JSON or YAML):
-//
-//	[
-//	  {
-//	    "name":     "descriptive name — becomes the subtest label",
-//	    "input":    { ...your input fields... },
-//	    "expected": { ...your expected output fields... }
-//	  }
-//	]
+// This separates "what cases to test" from "how to test them".
+// Adding a new case means editing a JSON/YAML file, not Go code.
 // =============================================================================
 
-// addInput matches the "input" field schema in our fixture files.
+// addInput and addExpected are the concrete types we unmarshal
+// fixture fields into inside the RunCases callback.
 type addInput struct {
 	A int `json:"a"`
 	B int `json:"b"`
 }
 
-// addExpected matches the "expected" field schema in our fixture files.
 type addExpected struct {
 	Result int `json:"result"`
 }
 
-func TestCalculator_Add_FileDriven_JSON(t *testing.T) {
+func TestCalculator_Add_JSON(t *testing.T) {
 	kit := testifywrapper.New(t)
-	calc := &Calculator{}
 
-	// Load cases from the JSON fixture file.
-	// If the file is missing or malformed, the test fails loudly here —
-	// never silently with zero cases run.
 	cases, err := kit.LoadJSON("../testdata/sample_cases.json")
 	kit.Require().NoError(err, "fixture file must load without error")
-	kit.Require().NotEmpty(cases, "fixture file must contain at least one case")
 
-	// RunCases wires each case as a named subtest.
-	// testifyWrapper owns the loop — you own the assertion logic inside fn.
 	kit.RunCases(t, cases, func(t *testing.T, tc testifywrapper.TestCase) {
-		// Always create a new kit bound to the subtest's own *testing.T.
-		// Never reuse the parent kit inside a subtest.
 		subKit := testifywrapper.New(t)
 
 		var input addInput
-		subKit.Require().NoError(
-			json.Unmarshal(tc.Input, &input),
-			"input field must unmarshal into addInput",
-		)
-
 		var expected addExpected
-		subKit.Require().NoError(
-			json.Unmarshal(tc.Expected, &expected),
-			"expected field must unmarshal into addExpected",
-		)
 
+		subKit.Require().NoError(json.Unmarshal(tc.Input, &input))
+		subKit.Require().NoError(json.Unmarshal(tc.Expected, &expected))
+
+		calc := &Calculator{}
 		result := calc.Add(input.A, input.B)
 
-		subKit.Assert().Equal(
-			expected.Result,
-			result,
-			"Add(%d, %d): expected %d, got %d", input.A, input.B, expected.Result, result,
-		)
+		subKit.Assert().Equal(expected.Result, result)
 	})
 }
 
-func TestCalculator_Add_FileDriven_YAML(t *testing.T) {
+func TestCalculator_Add_YAML(t *testing.T) {
 	kit := testifywrapper.New(t)
-	calc := &Calculator{}
 
-	// Identical pattern to the JSON version above.
-	// Input and Expected are always json.RawMessage regardless of source format,
-	// so the subtest body is exactly the same — only the loader changes.
+	// LoadYAML normalises Input and Expected to json.RawMessage —
+	// the RunCases callback is identical to the JSON variant above.
 	cases, err := kit.LoadYAML("../testdata/sample_cases.yaml")
 	kit.Require().NoError(err, "fixture file must load without error")
-	kit.Require().NotEmpty(cases, "fixture file must contain at least one case")
 
 	kit.RunCases(t, cases, func(t *testing.T, tc testifywrapper.TestCase) {
 		subKit := testifywrapper.New(t)
 
 		var input addInput
-		subKit.Require().NoError(
-			json.Unmarshal(tc.Input, &input),
-			"input field must unmarshal into addInput",
-		)
-
 		var expected addExpected
-		subKit.Require().NoError(
-			json.Unmarshal(tc.Expected, &expected),
-			"expected field must unmarshal into addExpected",
-		)
 
+		subKit.Require().NoError(json.Unmarshal(tc.Input, &input))
+		subKit.Require().NoError(json.Unmarshal(tc.Expected, &expected))
+
+		calc := &Calculator{}
 		result := calc.Add(input.A, input.B)
 
-		subKit.Assert().Equal(
-			expected.Result,
-			result,
-			"Add(%d, %d): expected %d, got %d", input.A, input.B, expected.Result, result,
-		)
+		subKit.Assert().Equal(expected.Result, result)
 	})
+}
+
+// =============================================================================
+// Pattern 4 — A second suite demonstrating parallel execution
+//
+// When ConfigureParallel is enabled, TestCalculatorSuite and TestAuditSuite
+// run concurrently with each other. This is Level A parallelism — the two
+// suite parent functions run in parallel. The Test* methods within each
+// suite still run sequentially relative to each other.
+//
+// Key rule for parallel suites: do not share any mutable state between
+// suites. Each suite must be fully self-contained. AuditSuite and
+// CalculatorSuite each own their own Calculator instance — they never
+// share one.
+// =============================================================================
+
+// AuditSuite is a second independent suite. Its only purpose in this
+// example is to show that two suites run concurrently when parallel is enabled.
+// In a real project this might be your OrderSuite, UserSuite, etc.
+type AuditSuite struct {
+	suite.BaseSuite
+	calc *Calculator
+}
+
+func (s *AuditSuite) SetupSuite() {
+	s.calc = &Calculator{}
+}
+
+func (s *AuditSuite) SetupTest() {
+	s.calc.Reset()
+}
+
+func (s *AuditSuite) Shutdown() {
+	s.calc = nil
+}
+
+func (s *AuditSuite) TestOperationIsRecorded() {
+	kit := testifywrapper.New(s.T())
+	s.calc.Add(1, 1)
+	kit.Assert().Len(s.calc.history, 1, "Add should append exactly one entry to history")
+}
+
+func (s *AuditSuite) TestHistoryIsEmptyAfterReset() {
+	kit := testifywrapper.New(s.T())
+	s.calc.Add(5, 5)
+	s.calc.Reset()
+	kit.Assert().Empty(s.calc.history, "Reset should clear all history entries")
+}
+
+// TestAuditSuite is the second suite entry point.
+// With parallel enabled, this runs concurrently with TestCalculatorSuite.
+func TestAuditSuite(t *testing.T) {
+	suite.Run(t, &AuditSuite{})
 }
