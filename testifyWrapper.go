@@ -38,6 +38,7 @@ import (
 	"github.com/FarhanAsfar/testify-wrapper/assert"
 	"github.com/FarhanAsfar/testify-wrapper/filehandler"
 	"github.com/FarhanAsfar/testify-wrapper/internal/hooks"
+	"github.com/FarhanAsfar/testify-wrapper/parallel"
 	"github.com/FarhanAsfar/testify-wrapper/require"
 )
 
@@ -54,9 +55,52 @@ import (
 //	    "expected": { ...your expected output structure... }
 //	}
 //
+
 // Input and Expected are raw JSON — unmarshal them into your own concrete types
 // inside the RunCases callback.
 type TestCase = filehandler.TestCase
+
+// ParallelConfig is re-exported from the parallel package for convenience,
+// so consumers can configure parallel testing without importing parallel directly.
+//
+// Use it with ConfigureParallel() in TestMain:
+//
+//	testifyWrapper.ConfigureParallel(testifyWrapper.ParallelConfig{
+//	    Enabled:  true,
+//	    MaxProcs: 4,
+//	})
+type ParallelConfig = parallel.Config
+
+// ConfigureParallel applies parallel settings for the current test process.
+// It must be called from TestMain, before m.Run() is invoked — calling it
+// after tests have started produces undefined behaviour.
+//
+// When Enabled is true, suite.Run will call t.Parallel() on each suite's
+// parent test function, allowing separate suites within the same package
+// to run concurrently.
+//
+// MaxProcs controls the GOMAXPROCS floor:
+//   - MaxProcs == 0: automaxprocs decides (reads Linux cgroup CPU quota,
+//     falls back to runtime.NumCPU). Recommended for CI and containers.
+//   - MaxProcs > 0: GOMAXPROCS is set to at least this value.
+//
+// Always pair with a deferred ResetParallel() to restore the process state
+// after the test run completes.
+func ConfigureParallel(cfg ParallelConfig) {
+	parallel.Configure(cfg)
+}
+
+// ResetParallel restores GOMAXPROCS to its pre-Configure value and disables
+// parallel mode. Call it via defer in TestMain immediately after ConfigureParallel:
+//
+//	func TestMain(m *testing.M) {
+//	    testifyWrapper.ConfigureParallel(testifyWrapper.ParallelConfig{Enabled: true})
+//	    defer testifyWrapper.ResetParallel()
+//	    os.Exit(m.Run())
+//	}
+func ResetParallel() {
+	parallel.Reset()
+}
 
 // Instance is the central object for a single test function.
 // It owns the assert wrapper, require wrapper, file handler, and cleanup registry
