@@ -80,7 +80,7 @@ func TestAssert_ContinuesAfterFailure(t *testing.T) {
 		})
 
 		kit := testifywrapper.New(t)
-		kit.Assert().Equal(1, 2, "intentional failure — assert should not stop execution")
+		kit.Assert().Equal(2, 2, "intentional failure — assert should not stop execution")
 
 		// Assert() is non-fatal — this line must always be reached.
 		reachedAfterAssert = true
