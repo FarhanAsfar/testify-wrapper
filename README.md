@@ -153,6 +153,7 @@ func TestAdd_FileDriven(t *testing.T) {
 | `require`               | Fatal assertions — test stops immediately after failure              |
 | `suite`                 | Struct-based suite runner with ordered lifecycle hooks and `s.T()`   |
 | `filehandler`           | JSON/YAML fixture loader for data-driven tests                       |
+| `parallel`              | Parallel suite configuration — `Configure` and `Reset`              |
 | `internal/hooks`        | Internal cleanup registry (not for direct use)                       |
 
 ---
@@ -253,6 +254,58 @@ It is nil during `SetupSuite`, `TearDownSuite`, and `Shutdown` because those
 hooks run outside the subtest scope. If you need to log or assert during
 suite-level hooks, store a reference to the parent `*testing.T` manually
 in your suite struct when `suite.Run(t, s)` is called.
+
+---
+
+## Parallel Testing
+
+Parallel mode allows separate suites within the same package to run
+concurrently. Configure it once from `TestMain`, before any test executes.
+
+```go
+func TestMain(m *testing.M) {
+    testifywrapper.ConfigureParallel(testifywrapper.ParallelConfig{
+        Enabled:  true,
+        MaxProcs: 0, // let automaxprocs decide — recommended for CI and containers
+    })
+    defer testifywrapper.ResetParallel()
+    os.Exit(m.Run())
+}
+```
+
+**What `MaxProcs` does:**
+
+| Value        | Behaviour                                                                 |
+|--------------|---------------------------------------------------------------------------|
+| `0` (default)| automaxprocs reads the Linux cgroup CPU quota, falls back to `NumCPU()`  |
+| `> 0`        | GOMAXPROCS is set to at least this value (used as a floor)               |
+
+`MaxProcs: 0` is the correct default for CI and containerised environments.
+Use an explicit value only when you need to constrain or guarantee a minimum
+thread count on a known machine.
+
+**What runs in parallel:**
+When enabled, each `suite.Run(t, s)` call marks its parent test function
+as parallel. This means `TestUserSuite` and `TestOrderSuite` run concurrently
+with each other. The `Test*` methods within a single suite always run
+sequentially relative to each other.
+
+**When NOT to enable parallel mode:**
+
+Do not enable parallel mode if any of the following apply to your suite:
+
+- **Shared global state** — environment variables, package-level variables,
+  or global caches written by one suite will race with reads from another.
+- **Non-isolated database fixtures** — if two suites truncate and seed the
+  same tables, they will corrupt each other's data mid-run.
+- **Port or file lock contention** — two suites starting servers on the same
+  port or writing to the same file path will fail non-deterministically.
+- **Execution order dependencies** — if Suite B assumes Suite A has already
+  run and left data behind, parallel mode will break that assumption silently.
+
+The safe rule: each suite must be fully self-contained. It must set up
+everything it needs in `SetupSuite`, tear it all down in `Shutdown`, and
+never read or write anything shared with another suite.
 
 ---
 
