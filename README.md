@@ -1,9 +1,8 @@
 # testifyWrapper
 
-A consistent, opinionated Go testing harness for W3 Engineers projects,
-built on top of [testify](https://github.com/stretchr/testify).
+A consistent, opinionated Go testing harness, built on top of [testify](https://github.com/stretchr/testify).
 
-One import. One `New(t)` call. You get assertions, lifecycle hooks,
+One import. One `New(t)` call. We get assertions, lifecycle hooks,
 resource cleanup, and file-driven test execution — all wired together.
 
 ---
